@@ -1,0 +1,172 @@
+# WorkBuddy 任务状态主动推送（Task Monitor）
+
+监控 WorkBuddy 桌面端任务列表中的所有任务，在任务完成、异常终止、等待用户确认、疑似卡住时，主动推送通知到微信，微信额度用尽或推送失败时自动降级为邮件通知。
+
+## 项目简介
+
+WorkBuddy 桌面端会在本地 SQLite 数据库中记录每个会话任务的状态（运行中 / 已完成 / 终止等）。本项目是一个零第三方依赖的常驻 Python 小程序，通过**只读**方式轮询该数据库，识别任务状态变化，并通过 Server 酱 Turbo 推送到微信；当日微信额度用尽或推送失败时，自动改用 SMTP 邮件发送，确保通知不中断。
+
+- **零侵入**：只读数据库，不修改 WorkBuddy 任何数据与配置
+- **零依赖**：仅用 Python 标准库（sqlite3 / urllib / smtplib）
+- **双通道**：微信为主、邮件兜底
+- **防轰炸**：状态指纹去重 + 冷却时间 + 每日限额
+
+## 主要功能
+
+| 功能 | 说明 |
+|---|---|
+| 任务完成通知 | 任务由运行中变为 completed 时推送 |
+| 异常终止通知 | 任务变为 terminated / failed / cancelled 时推送 |
+| 待确认提醒 | 检测到新的等待用户确认/授权记录时推送，并附上待确认内容 |
+| 卡住提醒 | 任务仍在运行但超过设定时长（默认 10 分钟）无活动时提醒，带冷却时间 |
+| 双通道推送 | Server 酱 Turbo → 微信；额度用尽或失败时自动降级 SMTP 邮件 |
+| 去重与限额 | 仅在状态真正变化时推送，每日微信发送上限可配 |
+| 单实例锁 | 本地端口加锁，避免重复启动多个监控进程 |
+| 日志追溯 | 全程写入 monitor.log，便于排查 |
+
+## 安装与运行步骤
+
+### 环境要求
+
+- Windows 10/11（其他系统亦可运行，开机自启部分需自行适配）
+- Python 3.8+（无需安装任何第三方包）
+- WorkBuddy 桌面端（提供状态数据库）
+
+### 步骤
+
+1. 下载或克隆本项目到本地任意目录。
+2. 复制示例配置并重命名：
+
+   ```bash
+   copy task_monitor_config.example.json task_monitor_config.json
+   ```
+
+3. 编辑 `task_monitor_config.json`，至少填写：
+   - `sendkey`：Server 酱 Turbo 的 SendKey
+   - `email.smtp_user` / `email.smtp_pass` / `email.mail_to`（如需邮件兜底）
+
+4. 自检（读取任务状态并发送测试通知，不改动状态文件）：
+
+   ```bash
+   python task_monitor.py --self-test
+   ```
+
+5. 仅测试邮件通道：
+
+   ```bash
+   python task_monitor.py --test-email
+   ```
+
+6. 常驻运行：
+
+   ```bash
+   python task_monitor.py
+   ```
+
+   脚本启动后会按 `poll_seconds` 循环巡检。
+
+### 配置开机自启（Windows）
+
+用「任务计划程序」创建一个触发器为「登录时」的任务，操作指向：
+
+- 程序：`pythonw.exe` 的完整路径
+- 参数：`task_monitor.py` 的完整路径
+
+这样登录后静默启动、不弹黑窗。程序内置单实例锁，重复启动不会产生多个实例。
+
+## 配置说明
+
+配置文件：`task_monitor_config.json`（由 `task_monitor_config.example.json` 复制而来，已被 .gitignore 排除，不会提交）。
+
+| 字段 | 类型 | 说明 | 默认 |
+|---|---|---|---|
+| `sendkey` | string | Server 酱 Turbo 的 SendKey，形如 `SCT` 开头 | 空 |
+| `db_path` | string | WorkBuddy 数据库路径；留空则用 `~/.workbuddy/workbuddy.db` | 空 |
+| `poll_seconds` | int | 巡检间隔（秒） | 60 |
+| `stuck_minutes` | int | 超过多少分钟无活动判定为疑似卡住 | 10 |
+| `stuck_cooldown_minutes` | int | 卡住提醒的冷却时间（分钟） | 30 |
+| `daily_limit` | int | 每日微信推送条数上限 | 4 |
+| `exclude_titles` | array | 按标题关键词排除的任务（如监控程序自身所在对话） | [] |
+| `exclude_cwd` | array | 按工作目录关键词排除的任务 | [] |
+| `email.enabled` | bool | 是否启用邮件兜底 | true |
+| `email.smtp_host` | string | SMTP 服务器地址 | smtp.qq.com |
+| `email.smtp_port` | int | SMTP 端口 | 465 |
+| `email.use_ssl` | bool | 是否使用 SSL（465 端口为 true，587 端口为 false） | true |
+| `email.smtp_user` | string | 发件邮箱地址 | 空 |
+| `email.smtp_pass` | string | SMTP 授权码（不是登录密码） | 空 |
+| `email.mail_to` | string | 收件邮箱地址 | 空 |
+| `email.sender_name` | string | 发件人显示名 | 任务监控助手 |
+
+### 获取 Server 酱 SendKey
+
+1. 打开 `https://sct.ftqq.com`，用接收通知的微信扫码登录。
+2. 关注「方糖」公众号并绑定。
+3. 在「SendKey」页面复制以 `SCT` 开头的密钥。
+
+### 获取 QQ 邮箱 SMTP 授权码
+
+1. 登录 QQ 邮箱网页版 → 设置 → 账户。
+2. 开启「IMAP/SMTP 服务」，按提示完成短信验证。
+3. 获得 16 位授权码，填入 `email.smtp_pass`。
+
+> 163、Gmail 等邮箱同理：开启 SMTP 服务后生成授权码。
+
+## 使用方法
+
+```bash
+# 常驻监控（默认）
+python task_monitor.py
+
+# 只跑一轮巡检
+python task_monitor.py --once
+
+# 自检：打印当前所有任务状态，并发送微信与邮件测试通知（不改动状态文件）
+python task_monitor.py --self-test
+
+# 仅测试邮件通道
+python task_monitor.py --test-email
+```
+
+运行后无需干预。通知示例：
+
+- `✅ 完成｜某任务` — 任务已完成
+- `⚠️ 异常｜某任务` — 任务异常终止
+- `🙋 待拍板｜某任务` — 任务在等待你确认
+- `⏳ 卡住｜某任务` — 任务超过阈值无进展
+
+### 日常运维
+
+- 查看日志：`monitor.log`
+- 调整参数：编辑 `task_monitor_config.json`，下次巡检自动生效
+- 状态文件：`task-monitor-state.json`（删除后重建基线，历史任务不会被误报）
+- 重启监控：在任务计划程序中重启对应任务
+
+## 目录结构
+
+```
+.
+├── task_monitor.py                    # 主程序（零第三方依赖）
+├── task_monitor_config.example.json   # 配置示例（复制为 task_monitor_config.json 后填写）
+├── .gitignore                         # 排除敏感配置与运行时产物
+├── README.md                          # 本文档
+└── （运行时生成，不提交）
+    ├── task_monitor_config.json       # 实际配置（含密钥，绝不提交）
+    ├── task-monitor-state.json        # 状态快照
+    └── monitor.log                    # 运行日志
+```
+
+## 注意事项
+
+- **只读数据库**：程序以 `mode=ro` 只读方式打开数据库，不会修改 WorkBuddy 任何数据。
+- **依赖 WorkBuddy 运行**：任务状态由 WorkBuddy 写入其本地数据库，WorkBuddy 未运行时无法检测新变化。
+- **卡住判定是启发式**：基于「长时间无活动」，长时间计算的正常任务也可能被提醒，阈值可调。
+- **待确认识别的粒度**：依赖 WorkBuddy 是否将等待确认记录写入 `session_turn_interruptions` 表；若不写入则无法提醒。
+- **凭据安全**：SendKey、SMTP 授权码仅保存在本机 `task_monitor_config.json`，该文件已被 .gitignore 排除。请勿将其提交到任何版本库。
+- **免费额度**：Server 酱免费版每日 5 条，程序默认上限 4 条留余量；超额自动转邮件。
+- **邮件可能进垃圾箱**：首次收到通知请标记为「非垃圾邮件」。
+- **休眠/关机不运行**：电脑休眠或关机期间程序不工作，恢复后按当前状态判定。
+- **数据库结构依赖**：读取 `sessions` 与 `session_turn_interruptions` 两张表；若 WorkBuddy 版本升级导致表结构变化，可能需要适配。
+
+## 许可
+
+MIT License，详见 LICENSE 文件。

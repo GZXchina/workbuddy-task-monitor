@@ -1,0 +1,20 @@
+{
+  "sendkey": "YOUR_SERVERCHAN_SENDKEY",
+  "db_path": "",
+  "poll_seconds": 60,
+  "stuck_minutes": 10,
+  "stuck_cooldown_minutes": 30,
+  "daily_limit": 4,
+  "exclude_titles": [],
+  "exclude_cwd": [],
+  "email": {
+    "enabled": true,
+    "smtp_host": "smtp.qq.com",
+    "smtp_port": 465,
+    "use_ssl": true,
+    "smtp_user": "your_account@example.com",
+    "smtp_pass": "YOUR_SMTP_AUTH_CODE",
+    "mail_to": "your_account@example.com",
+    "sender_name": "任务监控助手"
+  }
+}
