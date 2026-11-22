@@ -133,12 +133,12 @@ try {
     $shortcut.Save()
     Write-Host "[OK] 已在桌面创建快捷方式：任务监控面板"
 } catch {
-    Write-Host "[提示] 桌面快捷方式创建失败（不影响使用），可直接双击 启动面板.bat"
+    Write-Host "[提示] 桌面快捷方式创建失败（不影响使用），可直接双击 启动面板.bat / start_panel.bat"
 }
 
 Write-Host ""
 Write-Host "===== 部署完成 =====" -ForegroundColor Green
-Write-Host "打开面板：双击 启动面板.bat 或桌面「任务监控面板」，可查看状态并一键开关监控"
+Write-Host "打开面板：双击 启动面板.bat（或 start_panel.bat）、或桌面「任务监控面板」，可查看状态并一键开关监控"
 Write-Host "验证：运行  python task_monitor.py --self-test   会读取任务并发一条测试通知"
 Write-Host "日志：$baseDir\monitor.log"
 Write-Host "提示：若本机 WorkBuddy 未安装或未运行，程序会自动待机，启动 WorkBuddy 后自动开始巡检。"
