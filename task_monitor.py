@@ -33,6 +33,7 @@ import smtplib
 import hashlib
 import sqlite3
 import traceback
+import subprocess
 from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -423,6 +424,23 @@ def self_test(cfg):
     log("===== 自检结束 =====")
 
 
+def workbuddy_running():
+    """检测 WorkBuddy 主进程是否在运行（Windows）。其他平台或检测失败时按"运行中"处理，以免误待机。"""
+    if os.name != "nt":
+        return True
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq WorkBuddy.exe", "/NH"],
+            capture_output=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        # Windows 中文环境下输出为 GBK，用 mbcs 解码；统一忽略解码错误
+        text = out.stdout.decode("mbcs", "ignore") if out.stdout else ""
+        return "WorkBuddy.exe" in text
+    except Exception:
+        return True  # 检测失败时不阻塞监控
+
+
 _SOCK = None  # 持有单实例锁的 socket，需保持引用不被回收
 
 
@@ -467,8 +485,23 @@ def main():
     log("监控程序启动：轮询 %ds，卡住阈值 %d 分钟，微信每日上限 %d 条，邮件兜底=%s"
         % (cfg["poll_seconds"], cfg["stuck_minutes"], cfg["daily_limit"],
            "已就绪" if mail_ready else "未配置"))
+    # WorkBuddy 进程感知：没启动时静默待机（不刷错误日志），一启动立刻恢复巡检
+    idle_interval = max(cfg["poll_seconds"], 30)
+    last_alive = None  # None=尚未判定，True/False=上一轮检测结果
     while True:
         try:
+            alive = workbuddy_running()
+            if alive != last_alive:  # 仅在状态切换时记一条日志，避免刷屏
+                if alive:
+                    log("检测到 WorkBuddy 已启动，开始巡检。")
+                else:
+                    log("未检测到 WorkBuddy 进程，进入待机（每 %ds 检测一次，启动后自动开始巡检）。" % idle_interval)
+                last_alive = alive
+
+            if not alive:
+                time.sleep(idle_interval)
+                continue
+
             run_once(cfg)
         except Exception:
             log("本轮巡检异常（下轮重试）：\n%s" % traceback.format_exc())
