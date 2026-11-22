@@ -35,6 +35,24 @@ WorkBuddy 桌面端会在本地 SQLite 数据库中记录每个会话任务的�
 
 ### 步骤
 
+**方式一：一键部署（推荐，Windows）**
+
+1. 克隆或下载本项目到本地任意目录。
+2. 在项目目录打开 PowerShell，执行：
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\setup.ps1
+   ```
+
+3. 首次运行会自动生成 `task_monitor_config.json` 并用记事本打开，按提示填写 `sendkey` 后保存退出，**再次运行同一命令**即可完成部署（自动注册计划任务并启动）。
+4. 想验证是否成功，可执行：
+
+   ```powershell
+   python task_monitor.py --self-test
+   ```
+
+**方式二：手动部署**
+
 1. 下载或克隆本项目到本地任意目录。
 2. 复制示例配置并重命名：
 
@@ -65,6 +83,25 @@ WorkBuddy 桌面端会在本地 SQLite 数据库中记录每个会话任务的�
    ```
 
    脚本启动后会按 `poll_seconds` 循环巡检。
+
+### 在另一台电脑上部署
+
+**需要重新部署一次**——计划任务是绑定到具体电脑的系统配置，不会随代码复制过去。步骤：
+
+1. 新电脑安装 Python 3.8+（安装时勾选 "Add Python to PATH"）。
+2. 新电脑需装有 WorkBuddy 桌面端，且至少启动过一次（生成状态数据库）。
+3. 克隆本项目：
+
+   ```bash
+   git clone https://github.com/GZXchina/workbuddy-task-monitor.git
+   cd workbuddy-task-monitor
+   ```
+
+4. 把 `setup.ps1` 和 `task_monitor.py` 复制到实际要用的目录（也可以直接用克隆目录）。
+5. 运行 `powershell -ExecutionPolicy Bypass -File .\setup.ps1`，按提示填 `sendkey`。
+6. 再运行一次完成部署，随后执行 `python task_monitor.py --self-test` 验证。
+
+注意：`sendkey` 是个人凭据，不要提交到任何仓库；每台电脑各自保存一份本地配置即可（可用同一个 SendKey，也可在 Server 酱后台建多个）。
 
 ### 配置开机自启（Windows）
 
@@ -151,6 +188,7 @@ python task_monitor.py --test-email
 ```
 .
 ├── task_monitor.py                    # 主程序（零第三方依赖）
+├── setup.ps1                          # Windows 一键部署脚本（检查环境/生成配置/注册自启）
 ├── task_monitor_config.example.json   # 配置示例（复制为 task_monitor_config.json 后填写）
 ├── .gitignore                         # 排除敏感配置与运行时产物
 ├── README.md                          # 本文档
