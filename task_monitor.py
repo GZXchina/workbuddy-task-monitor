@@ -580,11 +580,13 @@ def main():
                 log("收到面板的「立即巡检」请求，提前巡检。")
 
             cur_map, events = run_once(cfg)
+            poll_ms = int(time.time() * 1000)
             write_status(started_at=started_at, paused=False, workbuddy_alive=True,
-                         last_poll_at=int(time.time() * 1000), monitored=len(cur_map),
+                         last_poll_at=poll_ms, monitored=len(cur_map),
                          events=len(events), next_check_in=cfg["poll_seconds"], loop="working")
 
-            # 分片睡眠：面板若点了「关闭监控」或「立即巡检」，1 秒内响应
+            # 分片睡眠：面板若点了「关闭监控」或「立即巡检」，1 秒内响应；
+            # 等待期间每 10 秒刷一次心跳，面板上不会显示成"很久没动"
             waited = 0
             while waited < cfg["poll_seconds"]:
                 time.sleep(1)
@@ -594,6 +596,11 @@ def main():
                     break
                 if int(c.get("poll_request_at") or 0) > _handled_poll_req:
                     break
+                if waited % 10 == 0:
+                    write_status(started_at=started_at, paused=False, workbuddy_alive=True,
+                                 last_poll_at=poll_ms, monitored=len(cur_map),
+                                 events=len(events), loop="waiting",
+                                 next_check_in=max(0, cfg["poll_seconds"] - waited))
         except Exception:
             log("本轮巡检异常（下轮重试）：\n%s" % traceback.format_exc())
             write_status(started_at=started_at, paused=control_paused(),
