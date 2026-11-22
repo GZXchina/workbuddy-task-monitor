@@ -692,8 +692,9 @@ async function tick(){
     const r = await fetch('/api/state', {cache:'no-store'});
     render(await r.json());
   }catch(e){
-    $('pillText').textContent = '面板已断开';
-    $('pill').className = 'pill off';
+    const t = $('pillText'), p = $('pill');
+    if(t){ t.textContent = '面板已断开'; p.className = 'pill off'; }
+    document.querySelectorAll('.btn').forEach(b => b.disabled = true);
   }
 }
 
@@ -745,11 +746,12 @@ $('swAuto').onclick = async () => {
 $('lnkQuit').onclick = async () => {
   if(!confirm('关闭面板？（监控程序会继续在后台运行）')) return;
   await post('/api/shutdown');
+  clearInterval(timer);
   document.body.innerHTML = '<div style="padding:60px;text-align:center;color:#8b97ac;font:15px/1.8 Microsoft YaHei UI,sans-serif">' +
     '面板已关闭，可以关闭这个标签页了。<br>监控程序仍在后台正常运行。</div>';
 };
 
-setInterval(tick, 2000);
+const timer = setInterval(tick, 2000);
 tick();
 </script>
 </body>
