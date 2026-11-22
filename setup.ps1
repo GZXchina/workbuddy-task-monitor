@@ -118,8 +118,27 @@ Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 3
 $state = (Get-ScheduledTask -TaskName $taskName).State
 Write-Host "[OK] 当前状态: $state"
+
+# ---- 6. 桌面快捷方式（指向可视化面板，失败不影响部署）----
+try {
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    $lnkPath = Join-Path $desktop "任务监控面板.lnk"
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortCut($lnkPath)
+    $shortcut.TargetPath = $pythonw
+    $shortcut.Arguments = "`"$(Join-Path $baseDir 'monitor_panel.py')`""
+    $shortcut.WorkingDirectory = $baseDir
+    $shortcut.IconLocation = "$pythonw,0"
+    $shortcut.Description = "WorkBuddy 任务监控面板"
+    $shortcut.Save()
+    Write-Host "[OK] 已在桌面创建快捷方式：任务监控面板"
+} catch {
+    Write-Host "[提示] 桌面快捷方式创建失败（不影响使用），可直接双击 启动面板.bat"
+}
+
 Write-Host ""
 Write-Host "===== 部署完成 =====" -ForegroundColor Green
+Write-Host "打开面板：双击 启动面板.bat 或桌面「任务监控面板」，可查看状态并一键开关监控"
 Write-Host "验证：运行  python task_monitor.py --self-test   会读取任务并发一条测试通知"
 Write-Host "日志：$baseDir\monitor.log"
 Write-Host "提示：若本机 WorkBuddy 未安装或未运行，程序会自动待机，启动 WorkBuddy 后自动开始巡检。"

@@ -51,6 +51,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "task_monitor_config.json")
 STATE_PATH = os.path.join(BASE_DIR, "task-monitor-state.json")
 LOG_PATH = os.path.join(BASE_DIR, "monitor.log")
+CONTROL_PATH = os.path.join(BASE_DIR, "monitor_control.json")   # 面板写入：暂停 / 立即巡检
+STATUS_PATH = os.path.join(BASE_DIR, "monitor_status.json")     # 程序写入：心跳与实时状态
 
 # 运行中 / 完成 / 失败 的状态集合
 RUNNING = {"working", "active"}
@@ -59,7 +61,7 @@ FAILED = {"terminated", "failed", "cancelled"}
 
 DEFAULTS = {
     "sendkey": "",
-    # 默认指向当前用户主目录下的 WorkBuddy 数据库，可在 config 中覆盖
+    # 默认取当前用户目录下的 WorkBuddy 数据库；如不在该位置，在配置文件里填 db_path
     "db_path": os.path.join(os.path.expanduser("~"), ".workbuddy", "workbuddy.db").replace("\\", "/"),
     "poll_seconds": 60,
     "stuck_minutes": 10,
@@ -84,7 +86,11 @@ DEFAULTS = {
 
 def log(msg):
     line = "[%s] %s" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg)
-    print(line)
+    try:
+        if sys.stdout is not None:  # pythonw 下 stdout 可能为 None
+            print(line, flush=True)
+    except Exception:
+        pass
     try:
         with open(LOG_PATH, "a", encoding="utf-8") as f:
             f.write(line + "\n")
@@ -92,12 +98,61 @@ def log(msg):
         pass
 
 
+def _read_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else default
+    except Exception:
+        return default
+
+
+def _write_json(path, data):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def read_control():
+    """面板下发的控制指令：{"paused": bool, "poll_request_at": 毫秒时间戳}"""
+    return _read_json(CONTROL_PATH, {})
+
+
+def control_paused():
+    return bool(read_control().get("paused"))
+
+
+def write_status(**kw):
+    """写心跳文件，供可视化面板判断运行状态。"""
+    now = int(time.time() * 1000)
+    kw["pid"] = os.getpid()
+    kw["last_heartbeat_at"] = now
+    kw["updated_at"] = now
+    _write_json(STATUS_PATH, kw)
+
+
+_handled_poll_req = 0
+
+
+def take_poll_request():
+    """返回未处理过的「立即巡检」请求时间戳；没有则返回 0。"""
+    global _handled_poll_req
+    req = int(read_control().get("poll_request_at") or 0)
+    if req > _handled_poll_req:
+        _handled_poll_req = req
+        return req
+    return 0
+
+
 def load_config():
     cfg = dict(DEFAULTS)
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg.update(json.load(f))
-    # db_path 留空时回退到默认主目录路径，避免示例配置直接用时报错
-    if not cfg.get("db_path"):
+    if not cfg.get("db_path"):          # 允许示例配置留空，回退到默认路径
         cfg["db_path"] = DEFAULTS["db_path"]
     return cfg
 
@@ -487,25 +542,64 @@ def main():
            "已就绪" if mail_ready else "未配置"))
     # WorkBuddy 进程感知：没启动时静默待机（不刷错误日志），一启动立刻恢复巡检
     idle_interval = max(cfg["poll_seconds"], 30)
-    last_alive = None  # None=尚未判定，True/False=上一轮检测结果
+    started_at = int(time.time() * 1000)
+    last_alive = None    # None=尚未判定，True/False=上一轮检测结果
+    last_paused = None
+
     while True:
         try:
+            paused = control_paused()
+            if last_paused is None:      # 启动首轮不记日志
+                last_paused = paused
+            elif paused != last_paused:  # 仅在状态切换时记一条日志，避免刷屏
+                log("监控已暂停：不再巡检、不推送（面板点「开启监控」即恢复）。" if paused
+                    else "监控已恢复，继续巡检。")
+                last_paused = paused
+
             alive = workbuddy_running()
-            if alive != last_alive:  # 仅在状态切换时记一条日志，避免刷屏
+            if alive != last_alive:
                 if alive:
                     log("检测到 WorkBuddy 已启动，开始巡检。")
                 else:
                     log("未检测到 WorkBuddy 进程，进入待机（每 %ds 检测一次，启动后自动开始巡检）。" % idle_interval)
                 last_alive = alive
 
+            if paused:
+                write_status(started_at=started_at, paused=True,
+                             workbuddy_alive=alive, loop="paused")
+                time.sleep(2)
+                continue
+
             if not alive:
+                write_status(started_at=started_at, paused=False,
+                             workbuddy_alive=False, next_check_in=idle_interval, loop="idle")
                 time.sleep(idle_interval)
                 continue
 
-            run_once(cfg)
+            if take_poll_request():
+                log("收到面板的「立即巡检」请求，提前巡检。")
+
+            cur_map, events = run_once(cfg)
+            write_status(started_at=started_at, paused=False, workbuddy_alive=True,
+                         last_poll_at=int(time.time() * 1000), monitored=len(cur_map),
+                         events=len(events), next_check_in=cfg["poll_seconds"], loop="working")
+
+            # 分片睡眠：面板若点了「关闭监控」或「立即巡检」，1 秒内响应
+            waited = 0
+            while waited < cfg["poll_seconds"]:
+                time.sleep(1)
+                waited += 1
+                c = read_control()
+                if bool(c.get("paused")):
+                    break
+                if int(c.get("poll_request_at") or 0) > _handled_poll_req:
+                    break
         except Exception:
             log("本轮巡检异常（下轮重试）：\n%s" % traceback.format_exc())
-        time.sleep(cfg["poll_seconds"])
+            write_status(started_at=started_at, paused=control_paused(),
+                         workbuddy_alive=workbuddy_running(), loop="error",
+                         last_error=traceback.format_exc()[-400:])
+            time.sleep(cfg["poll_seconds"])
 
 
 if __name__ == "__main__":
